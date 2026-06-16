@@ -65,6 +65,43 @@ curl -s -X POST http://127.0.0.1:8100/anonymize \
 | `DETECTOR_URL` | `http://127.0.0.1:8000/pii/extract` | 后台 GLiNER2 检测端点 |
 | `PII_ANON_KEY` | （无） | `encrypt` 算子密钥，16/24/32 字节 |
 
+## Docker 运行（Colima）
+
+本项目纯 CPU，适合容器化。**检测仍调宿主机原生的 GLiNER2 服务**（容器拿不到 Mac 的
+Metal/MLX，所以 `local-ai-service` 保持本机原生不动）。
+
+前提：① Colima 已启动 `colima start`；② 宿主 `local-ai-service` 在跑且绑 `0.0.0.0`
+（`cd ~/local-ai-service && localai start`，它默认就绑 0.0.0.0）。
+
+```bash
+cd ~/pii-anonymizer
+docker build -t pii-anonymizer:latest .
+
+docker run -d -p 8100:8100 \
+  --add-host=host.docker.internal:host-gateway \
+  --name pii-anonymizer --restart unless-stopped \
+  pii-anonymizer:latest
+```
+
+关键：`--add-host=host.docker.internal:host-gateway` 让容器能回连宿主机的 `:8000` 检测服务。
+默认 `DETECTOR_URL=http://host.docker.internal:8000/pii/extract`（已写进镜像）。
+
+```bash
+# 容器内的 HTTP 服务
+curl -s -X POST http://127.0.0.1:8100/anonymize \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"card 4111 1111 1111 1111","operator":"mask"}'
+
+# 一次性 CLI 也可走容器
+docker exec pii-anonymizer /app/.venv/bin/pii-anon "email john@x.com" -o hash
+
+# 运维
+docker logs -f pii-anonymizer
+docker stop/start/rm -f pii-anonymizer
+```
+
+> CLI 和库仍可在宿主机原生用（`pii-anon ...` / `from pii_anon import ...`）；容器主要承载常驻 HTTP 服务。
+
 ## 说明
 
 - 检测能力 = GLiNER2（多语言、模式化 PII 准；中文人名/地址不可靠）。本项目只换脱敏方式，不改检测。
