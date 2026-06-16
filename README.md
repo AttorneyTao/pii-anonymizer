@@ -110,6 +110,9 @@ docker run -d -p 8100:8100 \
 关键：`--add-host=host.docker.internal:host-gateway` 让容器能回连宿主机的 `:8000` 检测服务。
 默认 `DETECTOR_URL=http://host.docker.internal:8000/pii/extract`（已写进镜像）。
 
+**Web 前端**：容器跑起来后，浏览器打开 **http://localhost:8100/** 即是内置网页前端
+（文本输入 → 脱敏/检测输出，可选算子与检测模式）。前端由服务自身在 `GET /` 提供，无额外依赖。
+
 ```bash
 # 容器内的 HTTP 服务
 curl -s -X POST http://127.0.0.1:8100/anonymize \

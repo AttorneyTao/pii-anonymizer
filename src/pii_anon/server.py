@@ -1,5 +1,6 @@
-"""常驻 HTTP 脱敏服务: POST /anonymize, 检测可融合 GLiNER2 + presidio-analyzer。"""
+"""常驻 HTTP 脱敏服务: POST /anonymize, 检测可融合 GLiNER2 + presidio-analyzer; 内置 Web 前端。"""
 import json
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import (anonymize, detect_results, serialize, analyzer_available,
@@ -10,6 +11,8 @@ USAGE = {
     "detector": DETECTOR_URL,
     "modes": list(MODES),
     "endpoints": {
+        "GET  /": "Web 前端 (HTML)",
+        "GET  /api": "本说明 (JSON)",
         "GET  /health": "存活 + 各检测来源可用性",
         "POST /anonymize": {"text": "...", "operator?": list(OPERATORS),
                             "mode?": list(MODES), "threshold?": 0.5,
@@ -17,6 +20,8 @@ USAGE = {
         "POST /detect": {"text": "...", "mode?": list(MODES), "threshold?": 0.5},
     },
 }
+
+_UI_HTML = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -32,8 +37,19 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(n) or b"{}") if n else {}
 
+    def _send_html(self, html):
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path.rstrip("/") in ("", "/"):
+        p = self.path.rstrip("/")
+        if p in ("", "/ui"):
+            return self._send_html(_UI_HTML)
+        if p == "/api":
             return self._send(200, USAGE)
         if self.path == "/health":
             return self._send(200, {

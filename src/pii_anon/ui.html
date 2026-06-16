@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PII 脱敏</title>
+<style>
+  :root { --bg:#0f1117; --panel:#191c24; --line:#2a2f3a; --fg:#e6e8ec; --muted:#8b93a3; --accent:#4f8cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  header .status { font-size:12px; color:var(--muted); }
+  main { max-width:980px; margin:0 auto; padding:22px; }
+  .controls { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; margin-bottom:14px; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:12px; color:var(--muted); }
+  select, input[type=number], input[type=text] {
+    background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+    padding:8px 10px; font-size:14px; outline:none; }
+  select:focus, input:focus { border-color:var(--accent); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:760px){ .grid { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .panel h2 { font-size:13px; color:var(--muted); margin:0 0 8px; font-weight:500; display:flex; justify-content:space-between; }
+  textarea { width:100%; min-height:240px; resize:vertical; background:transparent; color:var(--fg);
+             border:none; outline:none; font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  #out { white-space:pre-wrap; word-break:break-word; min-height:240px; margin:0;
+         font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .btns { display:flex; gap:10px; margin:14px 0; }
+  button { border:none; border-radius:8px; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer; }
+  .primary { background:var(--accent); color:#fff; }
+  .ghost { background:var(--panel); color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .link { background:none; border:none; color:var(--accent); cursor:pointer; font-size:12px; padding:0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:5px; background:#243; color:#7fe3a0; }
+  .tag.presidio { background:#332544; color:#cba6ff; }
+  .err { color:#ff6b6b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PII 脱敏</h1>
+  <span class="status" id="status">连接中…</span>
+</header>
+<main>
+  <div class="controls">
+    <div class="field">
+      <label for="operator">脱敏算子</label>
+      <select id="operator">
+        <option value="replace">replace（替换 [TYPE]）</option>
+        <option value="redact">redact（删除）</option>
+        <option value="mask">mask（保留末4位）</option>
+        <option value="hash">hash（SHA-256）</option>
+        <option value="encrypt">encrypt（可逆加密）</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="mode">检测来源</label>
+      <select id="mode">
+        <option value="auto">auto（自动/融合）</option>
+        <option value="gliner">gliner（AI）</option>
+        <option value="presidio">presidio（本地）</option>
+        <option value="fused">fused（融合）</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="threshold">阈值</label>
+      <input type="number" id="threshold" min="0" max="1" step="0.05" value="0.5" style="width:90px">
+    </div>
+    <div class="field" id="keyField" style="display:none">
+      <label for="key">密钥（encrypt）</label>
+      <input type="text" id="key" placeholder="16/24/32 字节" style="width:200px">
+    </div>
+  </div>
+
+  <div class="btns">
+    <button class="primary" id="btnAnon">脱敏</button>
+    <button class="ghost" id="btnDetect">仅检测</button>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2><span>输入文本</span><button class="link" id="sample">填入示例</button></h2>
+      <textarea id="in" placeholder="在此粘贴或输入文本…"></textarea>
+    </div>
+    <div class="panel">
+      <h2><span>输出</span><button class="link" id="copy">复制</button></h2>
+      <pre id="out"></pre>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const out = $('out');
+
+$('operator').addEventListener('change', e => {
+  $('keyField').style.display = e.target.value === 'encrypt' ? 'flex' : 'none';
+});
+$('sample').onclick = () =>
+  $('in').value = "Contact John Smith at john.smith@acme.com or +1 415 555 0199, " +
+                  "card 4111 1111 1111 1111, IP 10.0.0.5.";
+$('copy').onclick = () => { navigator.clipboard.writeText(out.textContent || ''); };
+
+function body() {
+  const b = { text: $('in').value, mode: $('mode').value,
+              threshold: parseFloat($('threshold').value) };
+  return b;
+}
+async function call(path, extra) {
+  if (!$('in').value.trim()) { out.textContent = '请输入文本'; return; }
+  const btns = [$('btnAnon'), $('btnDetect')];
+  btns.forEach(b => b.disabled = true);
+  out.classList.remove('err'); out.textContent = '处理中…';
+  try {
+    const res = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'},
+                                    body: JSON.stringify({ ...body(), ...extra }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  } catch (e) {
+    out.classList.add('err'); out.textContent = '错误: ' + e.message;
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+$('btnAnon').onclick = async () => {
+  const d = await call('/anonymize', { operator:$('operator').value, key:$('key').value });
+  if (d) out.textContent = d.result;
+};
+$('btnDetect').onclick = async () => {
+  const d = await call('/detect', {});
+  if (!d) return;
+  const ents = d.entities || [];
+  if (!ents.length) { out.textContent = '未检测到 PII'; return; }
+  let html = `<div style="margin-bottom:8px;color:var(--muted)">来源: ${d.sources.join(' + ')}</div>`;
+  html += '<table><tr><th>类型</th><th>文本</th><th>置信度</th><th>来源</th></tr>';
+  for (const e of ents) {
+    html += `<tr><td>${e.type}</td><td>${escapeHtml(e.text)}</td>` +
+            `<td>${e.score}</td><td><span class="tag ${e.source}">${e.source||''}</span></td></tr>`;
+  }
+  out.innerHTML = html + '</table>';
+};
+function escapeHtml(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+fetch('/health').then(r => r.json()).then(h => {
+  $('status').textContent =
+    `检测: GLiNER2 ${h.detector_gliner ? '✓' : '✗'} · presidio ${h.presidio_analyzer ? '✓' : '✗'}`;
+}).catch(() => $('status').textContent = '后端不可达');
+</script>
+</body>
+</html>
