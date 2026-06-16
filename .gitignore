@@ -1,0 +1,13 @@
+# uv 虚拟环境
+.venv/
+
+# Python 缓存 / 构建
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 日志 / macOS
+*.log
+.DS_Store
