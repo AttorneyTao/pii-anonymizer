@@ -3,7 +3,8 @@ import argparse
 import json
 import sys
 
-from . import anonymize, detect, DetectorError, DETECTOR_URL, OPERATORS
+from . import (anonymize, detect_results, serialize, DetectorError,
+               AnalyzerUnavailable, DETECTOR_URL, OPERATORS, MODES)
 
 
 def main():
@@ -19,30 +20,39 @@ def main():
 
     ap = argparse.ArgumentParser(
         prog="pii-anon",
-        description="PII 脱敏: 检测调后台 GLiNER2 服务, 脱敏用 Presidio。子命令 serve 启动 HTTP 服务。")
+        description="PII 脱敏: 检测可融合 GLiNER2(远程) 与 presidio-analyzer(本地, 仅容器)。"
+                    "子命令 serve 启动 HTTP 服务。")
     ap.add_argument("text", nargs="*", help="待脱敏文本; 省略则从 stdin 读取")
     ap.add_argument("-o", "--operator", default="replace", choices=OPERATORS,
                     help="脱敏算子 (默认 replace)")
+    ap.add_argument("-m", "--mode", default="auto", choices=MODES,
+                    help="检测来源: auto(默认)/gliner/presidio/fused")
     ap.add_argument("-t", "--threshold", type=float, default=0.5)
-    ap.add_argument("--labels", help="逗号分隔的标签子集, 限定检测类型")
+    ap.add_argument("--labels", help="逗号分隔的标签子集 (仅对 GLiNER2 生效)")
     ap.add_argument("--key", help="encrypt 算子的密钥 (16/24/32 字节)")
     ap.add_argument("--detector-url", help=f"检测端点 (默认 {DETECTOR_URL})")
-    ap.add_argument("--detect", action="store_true", help="只输出检测到的实体(JSON), 不脱敏")
+    ap.add_argument("--detect", action="store_true",
+                    help="只输出检测结果(JSON, 含来源), 不脱敏")
     args = ap.parse_args()
 
     text = " ".join(args.text) if args.text else sys.stdin.read().strip()
     labels = args.labels.split(",") if args.labels else None
     try:
         if args.detect:
-            _, ents = detect(text, args.threshold, labels, args.detector_url)
-            print(json.dumps(ents, ensure_ascii=False, indent=2))
+            spans, sources = detect_results(text, args.threshold, labels,
+                                            args.detector_url, args.mode)
+            print(json.dumps({"sources": sources, "entities": serialize(spans, text)},
+                             ensure_ascii=False, indent=2))
         else:
             print(anonymize(text, args.operator, args.threshold, labels,
-                            args.detector_url, args.key))
+                            args.detector_url, args.key, args.mode))
     except DetectorError as e:
-        print(f"错误: {e}\n提示: 确认脱敏服务在跑 (cd ~/local-ai-service && localai start)",
-              file=sys.stderr)
+        print(f"错误: {e}\n提示: 起后台服务 (cd ~/local-ai-service && localai start), "
+              f"或用 -m presidio (需容器内的 presidio-analyzer)", file=sys.stderr)
         sys.exit(2)
+    except AnalyzerUnavailable as e:
+        print(f"错误: {e}\n提示: presidio/fused 模式请在容器内运行", file=sys.stderr)
+        sys.exit(3)
     except ValueError as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)

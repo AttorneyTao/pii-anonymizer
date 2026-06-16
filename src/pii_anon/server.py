@@ -1,17 +1,20 @@
-"""常驻 HTTP 脱敏服务: POST /anonymize, 检测转发到后台 GLiNER2 服务。"""
+"""常驻 HTTP 脱敏服务: POST /anonymize, 检测可融合 GLiNER2 + presidio-analyzer。"""
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import anonymize, detect, DetectorError, DETECTOR_URL, OPERATORS
+from . import (anonymize, detect_results, serialize, analyzer_available,
+               DetectorError, AnalyzerUnavailable, DETECTOR_URL, OPERATORS, MODES)
 
 USAGE = {
     "service": "pii-anonymizer",
     "detector": DETECTOR_URL,
+    "modes": list(MODES),
     "endpoints": {
-        "GET  /health": "存活检查",
+        "GET  /health": "存活 + 各检测来源可用性",
         "POST /anonymize": {"text": "...", "operator?": list(OPERATORS),
-                            "threshold?": 0.5, "labels?": [], "key?": "(encrypt 用)"},
-        "POST /detect": {"text": "...", "threshold?": 0.5, "labels?": []},
+                            "mode?": list(MODES), "threshold?": 0.5,
+                            "labels?": [], "key?": "(encrypt 用)"},
+        "POST /detect": {"text": "...", "mode?": list(MODES), "threshold?": 0.5},
     },
 }
 
@@ -33,7 +36,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") in ("", "/"):
             return self._send(200, USAGE)
         if self.path == "/health":
-            return self._send(200, {"status": "ok", "detector": DETECTOR_URL})
+            return self._send(200, {
+                "status": "ok",
+                "detector_gliner": DETECTOR_URL,
+                "presidio_analyzer": analyzer_available(),   # 容器内 True, 宿主 False
+            })
         self._send(404, {"error": "not found", "see": "/"})
 
     def do_POST(self):
@@ -43,17 +50,23 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/anonymize":
                 result = anonymize(b["text"], b.get("operator", "replace"),
                                    b.get("threshold", 0.5), b.get("labels"),
-                                   b.get("detector_url"), b.get("key"))
-                self._send(200, {"result": result, "operator": b.get("operator", "replace")})
+                                   b.get("detector_url"), b.get("key"),
+                                   b.get("mode", "auto"))
+                self._send(200, {"result": result, "operator": b.get("operator", "replace"),
+                                 "mode": b.get("mode", "auto")})
             elif p == "/detect":
-                _, ents = detect(b["text"], b.get("threshold", 0.5), b.get("labels"))
-                self._send(200, {"entities": ents})
+                spans, sources = detect_results(b["text"], b.get("threshold", 0.5),
+                                                b.get("labels"), b.get("detector_url"),
+                                                b.get("mode", "auto"))
+                self._send(200, {"sources": sources, "entities": serialize(spans, b["text"])})
             else:
                 self._send(404, {"error": "not found", "see": "/"})
         except KeyError as e:
             self._send(400, {"error": f"missing field {e}"})
         except DetectorError as e:
-            self._send(502, {"error": str(e), "hint": "确认后台 GLiNER2 服务在跑"})
+            self._send(502, {"error": str(e), "hint": "起后台 GLiNER2 服务, 或用 mode=presidio"})
+        except AnalyzerUnavailable as e:
+            self._send(501, {"error": str(e)})
         except ValueError as e:
             self._send(400, {"error": str(e)})
         except Exception as e:
@@ -65,7 +78,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def run(host="127.0.0.1", port=8100):
     srv = ThreadingHTTPServer((host, port), Handler)
-    print(f"pii-anonymizer serving on http://{host}:{port}  (detector={DETECTOR_URL})", flush=True)
+    print(f"pii-anonymizer serving on http://{host}:{port}  "
+          f"(detector={DETECTOR_URL}, presidio_analyzer={analyzer_available()})", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

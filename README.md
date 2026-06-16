@@ -58,11 +58,35 @@ curl -s -X POST http://127.0.0.1:8100/anonymize \
 | `hash` | SHA-256，同值同结果（一致性假名化） | 否 |
 | `encrypt` | AES 加密，需密钥 | **是**（用 Presidio DeanonymizeEngine 还原） |
 
+## 检测模式（`-m` / `mode`）
+
+检测有两个来源，可单用或融合：
+
+- **gliner**：后台 GLiNER2 服务（多语言、强 NER）。
+- **presidio**：presidio-analyzer 本地检测（spaCy + 正则 + Luhn/IBAN 等校验）。**仅容器内可用**
+  （宿主 Python 3.14 装不了 presidio-analyzer，代码懒加载，宿主缺它不影响其它模式）。
+
+| mode | 行为 | 适用 |
+|---|---|---|
+| `auto`（默认） | GLiNER2 可达 → 与 presidio **融合去重**；不可达 → presidio **兜底** | 通用，自动降级 |
+| `gliner` | 只用 GLiNER2 | 有 AI，只要多语言 NER |
+| `presidio` | 只用 presidio-analyzer（**无 AI 也能跑**） | 后台服务挂了 / 纯本地 |
+| `fused` | 两者都跑，合并去重 | 要最高召回 |
+
+融合规则：两来源的 span 按置信度从高到低贪心保留，丢弃重叠的低分项；实体类型名做统一归一。
+检测结果可用 `--detect` 查看，每条带 `source`（gliner / presidio）。
+
+```bash
+pii-anon "..." -m presidio        # 无 AI, 纯 presidio 检测
+pii-anon "..." -m fused --detect  # 看融合后每条来自哪个来源
+```
+
 ## 配置（环境变量）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `DETECTOR_URL` | `http://127.0.0.1:8000/pii/extract` | 后台 GLiNER2 检测端点 |
+| `PRESIDIO_SPACY_MODEL` | `en_core_web_sm` | presidio 用的 spaCy 模型（容器内） |
 | `PII_ANON_KEY` | （无） | `encrypt` 算子密钥，16/24/32 字节 |
 
 ## Docker 运行（Colima）
@@ -104,6 +128,9 @@ docker stop/start/rm -f pii-anonymizer
 
 ## 说明
 
-- 检测能力 = GLiNER2（多语言、模式化 PII 准；中文人名/地址不可靠）。本项目只换脱敏方式，不改检测。
-- 依赖 `presidio-anonymizer`（纯脱敏，无 spaCy，支持 Python 3.14）。
-  `presidio-analyzer`（正则+校验那套）不支持 3.14，本项目刻意不用它，检测统一交给 GLiNER2 服务。
+- 检测能力 = GLiNER2（多语言、模式化 PII 准；中文人名/地址不可靠）+ 可选 presidio-analyzer
+  （英文、正则+校验，结构化 PII 强）。两者可融合（见「检测模式」）。
+- 依赖分两层：`presidio-anonymizer`（纯脱敏，无 spaCy，**支持 Python 3.14**，宿主/容器都装）；
+  `presidio-analyzer`（spaCy NER + 正则，**不支持 3.14**）**只在容器内装**，代码懒加载，
+  所以宿主原生 `pii-anon` 仍可用（只是没有 presidio/fused 模式）。
+- presidio 本地检测目前配英文 spaCy 模型（`en_core_web_sm`）；非英文 NER 仍以 GLiNER2 为主。
